@@ -1,5 +1,15 @@
 # NovaCommerce — Customer Operations Control Center
 
+[![Live demo](https://img.shields.io/badge/demo-live-4f46e5?logo=vercel&logoColor=white)](https://novacommerce-ops.vercel.app)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)
+![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/Postgres-Supabase-3ECF8E?logo=supabase&logoColor=white)
+![Vercel](https://img.shields.io/badge/Hosted_on-Vercel-000000?logo=vercel&logoColor=white)
+![Railway](https://img.shields.io/badge/Mock_API-Railway-0B0D0E?logo=railway&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-29_passing-0f9d6b?logo=vitest&logoColor=white)
+
 An internal operations platform for NovaCommerce. It brings orders, payments and shipments from three separate systems into one place. Employees can investigate problems, cancel orders and refund customers (with manager approval), automate follow-ups, and see whenever an integration is failing.
 
 Built for the Infinix Labs Forward Deployed Engineer assessment.
