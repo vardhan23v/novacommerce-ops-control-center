@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
-import { use, useState } from "react";
-import { ArrowLeft, Ban, LifeBuoy, RefreshCw, RotateCcw } from "lucide-react";
-import { api, Badge, Button, Card, Empty, ErrorBox, Field, fullDate, inputCls, inr, Modal, PageHeader, Skeleton, Table, td, useApi, useToast, when } from "@/components/ui";
+import { Suspense, use, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, Ban, Bot, CheckCircle2, CircleSlash, CreditCard, LifeBuoy, Mail, MoreHorizontal, RefreshCw, RotateCcw, Sparkles, Truck, User, Workflow, XCircle } from "lucide-react";
+import { api, Badge, Button, Callout, Card, clsx, Empty, ErrorBox, Field, fullDate, inputCls, inr, KeyValue, Menu, Modal, SkeletonBlock, Table, td, toneOf, useApi, useToast, when, StatusDot, titleCase, actionLabel } from "@/components/ui";
 import { useCan } from "@/components/session";
 
 type Order = {
@@ -10,182 +11,295 @@ type Order = {
   customer: { id: string; name: string; email: string };
   payment: { id: string; status: string; amountMinor: number } | null;
   shipment: { id: string; status: string; updatedAt: string; lastSyncError: string | null; lastSyncErrorAt: string | null } | null;
-  refunds: { id: string; amountMinor: number; status: string; externalId: string | null; error: string | null; requestedBy: string; source: string; createdAt: string; approval: { status: string; decidedBy: string | null; decisionNote: string | null } | null }[];
+  refunds: { id: string; amountMinor: number; status: string; externalId: string | null; error: string | null; reason: string | null; requestedBy: string; source: string; createdAt: string; approval: { status: string; decidedBy: string | null; decisionNote: string | null } | null }[];
   tickets: { id: string; externalId: string | null; reason: string; status: string; error: string | null; createdBy: string; createdAt: string }[];
   operations: { id: string; type: string; status: string; detail: string | null; actor: string; createdAt: string }[];
-  audits: { id: string; actor: string; action: string; outcome: string; createdAt: string; details: Record<string, unknown> | null }[];
+  audits: { id: string; actor: string; actorRole: string | null; action: string; outcome: string; createdAt: string; details: Record<string, unknown> | null }[];
   executions: { id: string; status: string; detail: string; createdAt: string; workflow: { name: string } }[];
   eligibility: { cancel: string | null; refund: string | null; refundableMinor: number };
 };
 
-function Row({ k, v }: { k: string; v: React.ReactNode }) {
-  return <div className="flex justify-between gap-3 py-1"><dt className="text-ink-500">{k}</dt><dd className="text-right font-medium">{v}</dd></div>;
-}
+type Ev = { id: string; at: string; kind: "operation" | "workflow" | "audit"; title: string; raw?: string; detail?: string; tone: ReturnType<typeof toneOf>; actor?: string };
 
-export default function OrderDetail({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+function OrderDetail({ id }: { id: string }) {
   const { data: o, error, loading, reload } = useApi<Order>(`/api/orders/${id}`);
   const toast = useToast();
+  const sp = useSearchParams();
+  const router = useRouter();
   const canCancel = useCan("order.cancel");
   const canRefund = useCan("refund.request");
   const canTicket = useCan("ticket.create");
   const [modal, setModal] = useState<null | "cancel" | "refund" | "ticket">(null);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"all" | "audit">("all");
 
-  async function act(fn: () => Promise<unknown>, ok: string) {
+  // Deep links from the orders table: ?action=cancel|refund|ticket
+  useEffect(() => {
+    const a = sp.get("action");
+    if (!o || !a) return;
+    if (a === "refund") setAmount(String(o.eligibility.refundableMinor / 100));
+    if (a === "cancel" || a === "refund" || a === "ticket") setModal(a);
+    router.replace(`/orders/${id}`, { scroll: false });
+  }, [o, sp, id, router]);
+
+  const open = (m: "cancel" | "refund" | "ticket") => {
+    setFormError(null);
+    setReason("");
+    if (m === "refund" && o) setAmount(String(o.eligibility.refundableMinor / 100));
+    setModal(m);
+  };
+
+  async function act(fn: () => Promise<unknown>, title: string, text: string) {
     setBusy(true);
     setFormError(null);
     try {
       await fn();
-      toast("success", ok);
+      toast("success", text, title);
       setModal(null);
-      setReason("");
-      setAmount("");
     } catch (e) {
       setFormError((e as Error).message);
-      toast("error", (e as Error).message);
     } finally {
       setBusy(false);
       reload();
     }
   }
   async function refresh() {
-    setBusy(true);
+    setRefreshing(true);
     try {
       const r = await api<{ issues: { service: string; error: string }[] }>(`/api/orders/${id}/refresh`, { method: "POST" });
-      if (r.issues.length) toast("error", `Refreshed with errors: ${r.issues.map((i) => `${i.service}: ${i.error}`).join("; ")}`);
-      else toast("success", "Refreshed from Commerce, Payment and Shipping");
+      if (r.issues.length) toast("error", r.issues.map((i) => `${titleCase(i.service)}: ${i.error}`).join(" · "), "Refreshed with errors");
+      else toast("success", "Commerce, Payment and Shipping data is up to date.", "Order refreshed");
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
-      setBusy(false);
+      setRefreshing(false);
       reload();
     }
   }
 
-  if (error) return <ErrorBox error={error} onRetry={reload} />;
-  if (loading && !o) return <Skeleton rows={10} />;
+  const timeline = useMemo<Ev[]>(() => {
+    if (!o) return [];
+    const ev: Ev[] = [
+      { id: "created", at: o.createdAt, kind: "operation", title: `Order placed via ${o.channel}`, tone: "neutral", detail: inr(o.amountMinor) },
+      ...o.operations.map((p) => ({ id: p.id, at: p.createdAt, kind: "operation" as const, title: `${titleCase(p.type)} ${p.status}`, detail: p.detail ?? undefined, tone: toneOf(p.status), actor: p.actor })),
+      ...o.executions.map((e) => ({ id: e.id, at: e.createdAt, kind: "workflow" as const, title: `Workflow “${e.workflow.name}” ${e.status}`, detail: e.detail, tone: toneOf(e.status) })),
+      ...o.audits.map((a) => ({
+        id: a.id, at: a.createdAt, kind: "audit" as const, title: actionLabel(a.action), raw: a.action, tone: toneOf(a.outcome), actor: a.actor,
+        detail: a.details ? describeDetails(a.details) : undefined,
+      })),
+    ];
+    return ev.filter((e) => (tab === "all" ? e.kind !== "audit" || /^(refund|ticket|webhook)\./.test(e.raw ?? "") : e.kind === "audit")).sort((a, b) => +new Date(b.at) - +new Date(a.at));
+  }, [o, tab]);
+
+  if (error) return <ErrorBox title={`Couldn't load ${id}`} error={error} onRetry={reload} />;
+  if (loading && !o) return <div className="space-y-4"><SkeletonBlock className="h-16 w-96" /><div className="grid gap-4 lg:grid-cols-3"><SkeletonBlock className="h-64 lg:col-span-2" /><SkeletonBlock className="h-64" /></div></div>;
   if (!o) return null;
 
   const amountMinor = (() => {
     const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(amount.replace(/[,₹\s]/g, ""));
     return m ? parseInt(m[1]) * 100 + parseInt((m[2] ?? "0").padEnd(2, "0")) : null;
   })();
+  const refundedOk = o.refunds.filter((r) => r.status === "succeeded").reduce((a, r) => a + r.amountMinor, 0);
+  const refundedPending = o.refunds.filter((r) => ["pending_approval", "executing", "unconfirmed"].includes(r.status)).reduce((a, r) => a + r.amountMinor, 0);
+  const captured = o.payment?.status === "captured" ? o.payment.amountMinor : 0;
+  const amountError = amountMinor !== null && amountMinor > o.eligibility.refundableMinor ? `Maximum refundable is ${inr(o.eligibility.refundableMinor)}` : undefined;
 
   return (
-    <>
-      <Link href="/orders" className="mb-2 inline-flex items-center gap-1 text-[12px] text-ink-500 hover:text-ink-800"><ArrowLeft className="size-3.5" />Orders</Link>
-      <PageHeader
-        title={o.id}
-        subtitle={<span className="flex flex-wrap items-center gap-2"><Badge status={o.status} /> {inr(o.amountMinor)} · {o.channel} · placed {fullDate(o.createdAt)} · synced {when(o.syncedAt)}</span>}
-        actions={
-          <>
-            <Button onClick={refresh} loading={busy && !modal}><RefreshCw className="size-3.5" />Refresh</Button>
-            {canTicket && <Button onClick={() => setModal("ticket")}><LifeBuoy className="size-3.5" />Ticket</Button>}
-            {canRefund && <Button onClick={() => { setAmount(String(o.eligibility.refundableMinor / 100)); setModal("refund"); }} disabled={!!o.eligibility.refund} title={o.eligibility.refund ?? ""}><RotateCcw className="size-3.5" />Request refund</Button>}
-            {canCancel && <Button variant="danger" onClick={() => setModal("cancel")} disabled={!!o.eligibility.cancel} title={o.eligibility.cancel ?? ""}><Ban className="size-3.5" />Cancel order</Button>}
-          </>
-        }
-      />
+    <div className="anim-in">
+      <Link href="/orders" className="mb-3 inline-flex items-center gap-1 text-[12px] text-fg-3 transition-colors hover:text-fg"><ArrowLeft className="size-3.5" />All orders</Link>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="font-mono text-[22px] font-semibold tracking-tight">{o.id}</h1>
+            <Badge status={o.status} />
+            {o.payment && <Badge status={o.payment.status}>Payment {o.payment.status}</Badge>}
+            {o.shipment && <Badge status={o.shipment.status}>Shipment {o.shipment.status}</Badge>}
+          </div>
+          <p className="mt-1 text-[13px] text-fg-2">
+            {o.customer.name} · <span className="num font-medium text-fg">{inr(o.amountMinor)}</span> · <span className="capitalize">{o.channel}</span> · placed {fullDate(o.createdAt)} · synced {when(o.syncedAt)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={refresh} loading={refreshing} icon={<RefreshCw className="size-3.5" />}>Refresh</Button>
+          <Link href={`/assistant?q=${encodeURIComponent(`Investigate ${o.id}`)}`}><Button icon={<Sparkles className="size-3.5 text-violet" />}>Ask Nova</Button></Link>
+          {canRefund && <Button variant="primary" onClick={() => open("refund")} disabled={!!o.eligibility.refund} title={o.eligibility.refund ?? undefined} icon={<RotateCcw className="size-3.5" />}>Request refund</Button>}
+          {(canCancel || canTicket) && (
+            <Menu
+              trigger={(p) => <Button {...p} aria-label="More actions" icon={<MoreHorizontal className="size-4" />} />}
+              items={[
+                ...(canTicket ? [{ label: "Open support ticket", icon: <LifeBuoy />, onSelect: () => open("ticket") }] : []),
+                ...(canCancel ? [{ label: "Cancel order", icon: <Ban />, danger: true, disabled: !!o.eligibility.cancel, hint: o.eligibility.cancel ?? undefined, onSelect: () => open("cancel") }] : []),
+              ]}
+            />
+          )}
+        </div>
+      </div>
+
       {o.shipment?.lastSyncError && (
-        <div className="mb-4"><ErrorBox error={`Shipping service lookup failed ${when(o.shipment.lastSyncErrorAt)}: ${o.shipment.lastSyncError}. Showing last known shipment data.`} /></div>
+        <div className="mb-4"><Callout tone="bad"><span className="font-medium">Shipping lookup failed {when(o.shipment.lastSyncErrorAt)}</span> — {o.shipment.lastSyncError}. Showing the last known shipment data; refresh once the carrier recovers.</Callout></div>
       )}
-      <div className="mb-4 flex flex-wrap gap-2 text-[12px]">
-        <span className="rounded-md border border-ink-200 bg-white px-2 py-1">Cancel: {o.eligibility.cancel ? <span className="text-ink-500">{o.eligibility.cancel}</span> : <span className="text-emerald-700">eligible</span>}</span>
-        <span className="rounded-md border border-ink-200 bg-white px-2 py-1">Refund: {o.eligibility.refund ? <span className="text-ink-500">{o.eligibility.refund}</span> : <span className="text-emerald-700">eligible up to {inr(o.eligibility.refundableMinor)}</span>}</span>
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <Eligibility ok={!o.eligibility.cancel} label="Cancellation" yes="Eligible — will be sent to Commerce" no={o.eligibility.cancel} />
+        <Eligibility ok={!o.eligibility.refund} label="Refund" yes={`Eligible up to ${inr(o.eligibility.refundableMinor)} · manager approval required`} no={o.eligibility.refund} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Customer"><dl><Row k="Name" v={o.customer.name} /><Row k="Email" v={o.customer.email} /><Row k="Customer ID" v={<span className="font-mono">{o.customer.id}</span>} /></dl></Card>
-        <Card title="Payment">{o.payment ? <dl><Row k="Status" v={<Badge status={o.payment.status} />} /><Row k="Captured" v={inr(o.payment.status === "captured" ? o.payment.amountMinor : 0)} /><Row k="Transaction" v={<span className="font-mono">{o.payment.id}</span>} /><Row k="Refundable" v={inr(o.eligibility.refundableMinor)} /></dl> : <Empty title="No payment record" />}</Card>
-        <Card title="Shipment">{o.shipment ? <dl><Row k="Status" v={<Badge status={o.shipment.status} />} /><Row k="Shipment" v={<span className="font-mono">{o.shipment.id}</span>} /><Row k="Carrier update" v={fullDate(o.shipment.updatedAt)} /></dl> : <Empty title="No shipment record" />}</Card>
-      </div>
+        <div className="space-y-4 lg:col-span-2">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card title={<span className="flex items-center gap-2"><User className="size-3.5 text-fg-3" />Customer</span>}>
+              <div className="mb-3 flex items-center gap-2.5">
+                <span className="grid size-9 place-items-center rounded-full bg-accent-soft text-[12px] font-semibold text-accent">{o.customer.name.split(" ").map((p) => p[0]).join("").slice(0, 2)}</span>
+                <div className="min-w-0"><div className="truncate font-medium">{o.customer.name}</div><div className="font-mono text-[11px] text-fg-3">{o.customer.id}</div></div>
+              </div>
+              <a href={`mailto:${o.customer.email}`} className="flex items-center gap-1.5 truncate text-[12px] text-fg-2 hover:text-accent"><Mail className="size-3.5" />{o.customer.email}</a>
+              <Link href={`/orders?q=${encodeURIComponent(o.customer.email)}`} className="mt-2 block text-[12px] font-medium text-accent hover:underline">View customer&apos;s orders</Link>
+            </Card>
+            <Card title={<span className="flex items-center gap-2"><CreditCard className="size-3.5 text-fg-3" />Payment</span>}>
+              {o.payment ? <KeyValue items={[["Status", <Badge key="s" status={o.payment.status} />], ["Transaction", <span key="t" className="font-mono text-[12px]">{o.payment.id}</span>], ["Amount", inr(o.payment.amountMinor)]]} /> : <Empty title="No payment record" />}
+            </Card>
+            <Card title={<span className="flex items-center gap-2"><Truck className="size-3.5 text-fg-3" />Shipment</span>}>
+              {o.shipment ? <KeyValue items={[["Status", <Badge key="s" status={o.shipment.status} />], ["Shipment", <span key="i" className="font-mono text-[12px]">{o.shipment.id}</span>], ["Carrier update", when(o.shipment.updatedAt)]]} /> : <Empty title="No shipment record" />}
+            </Card>
+          </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Card title="Refunds" pad={false}>
-          {o.refunds.length === 0 ? <Empty title="No refunds" /> : (
-            <Table head={["Amount", "Status", "Requested", "Approval", "Payment ref"]}>
-              {o.refunds.map((r) => (
-                <tr key={r.id}>
-                  <td className={td + " num font-medium"}>{inr(r.amountMinor)}</td>
-                  <td className={td}><Badge status={r.status} />{r.error && <div className="mt-0.5 max-w-56 text-[11px] text-rose-600">{r.error}</div>}</td>
-                  <td className={td + " text-[12px]"}>{r.requestedBy}<div className="text-[11px] text-ink-500">{r.source} · {when(r.createdAt)}</div></td>
-                  <td className={td + " text-[12px]"}>{r.approval ? <><Badge status={r.approval.status} />{r.approval.decidedBy && <div className="text-[11px] text-ink-500">{r.approval.decidedBy}</div>}</> : "—"}</td>
-                  <td className={td + " font-mono text-[11px]"}>{r.externalId ?? "—"}</td>
-                </tr>
+          <Card title="Financial summary" description="Order value, captured funds and refunds in INR">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+              {[
+                ["Order total", inr(o.amountMinor), ""],
+                ["Captured", inr(captured), o.payment?.status === "failed" ? "text-bad" : ""],
+                ["Refunded", inr(refundedOk), refundedOk ? "text-ok" : ""],
+                ["Pending refunds", inr(refundedPending), refundedPending ? "text-warn" : ""],
+                ["Refundable now", inr(o.eligibility.refund ? 0 : o.eligibility.refundableMinor), ""],
+              ].map(([l, v, c]) => (
+                <div key={l}><div className="text-[12px] text-fg-3">{l}</div><div className={clsx("num mt-1 text-[16px] font-semibold", c)}>{v}</div></div>
               ))}
-            </Table>
-          )}
-        </Card>
-        <Card title="Support tickets" pad={false}>
-          {o.tickets.length === 0 ? <Empty title="No tickets" /> : (
-            <ul className="divide-y divide-ink-100">
-              {o.tickets.map((t) => (
-                <li key={t.id} className="px-4 py-2">
-                  <div className="flex items-center justify-between"><span className="font-mono text-[12px]">{t.externalId ?? "not created"}</span><Badge status={t.status} /></div>
-                  <div className="text-[12px]">{t.reason}</div>
-                  {t.error && <div className="text-[11px] text-rose-600">{t.error}</div>}
-                  <div className="text-[11px] text-ink-500">{t.createdBy} · {when(t.createdAt)}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-        <Card title="Operations & automations" pad={false}>
-          {o.operations.length + o.executions.length === 0 ? <Empty title="No operations yet" /> : (
-            <ul className="divide-y divide-ink-100">
-              {o.operations.map((p) => (
-                <li key={p.id} className="flex justify-between gap-2 px-4 py-2">
-                  <div><span className="font-medium capitalize">{p.type}</span> by {p.actor}{p.detail && <div className="text-[11px] text-ink-500">{p.detail}</div>}</div>
-                  <div className="text-right"><Badge status={p.status} /><div className="text-[10px] text-ink-400">{when(p.createdAt)}</div></div>
-                </li>
-              ))}
-              {o.executions.map((e) => (
-                <li key={e.id} className="flex justify-between gap-2 px-4 py-2">
-                  <div><span className="font-medium">Workflow: {e.workflow.name}</span><div className="text-[11px] text-ink-500">{e.detail}</div></div>
-                  <div className="text-right"><Badge status={e.status} /><div className="text-[10px] text-ink-400">{when(e.createdAt)}</div></div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-        <Card title="Audit trail" pad={false}>
-          {o.audits.length === 0 ? <Empty title="No audit events" /> : (
-            <ul className="max-h-80 divide-y divide-ink-100 overflow-y-auto">
-              {o.audits.map((a) => (
-                <li key={a.id} className="flex justify-between gap-2 px-4 py-2">
-                  <div className="min-w-0"><span className="font-medium">{a.actor}</span> <span className="text-ink-500">{a.action}</span>
-                    {a.details && <div className="truncate text-[11px] text-ink-500">{Object.entries(a.details).filter(([, v]) => typeof v !== "object").map(([k, v]) => `${k}: ${v}`).join(" · ")}</div>}
+            </div>
+            {captured > 0 && (
+              <div className="mt-4 flex h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                <div className="bg-ok" style={{ width: `${(refundedOk / captured) * 100}%` }} />
+                <div className="bg-warn" style={{ width: `${(refundedPending / captured) * 100}%` }} />
+              </div>
+            )}
+          </Card>
+
+          <Card title="Refunds" description={`${o.refunds.length} request${o.refunds.length === 1 ? "" : "s"}`} pad={false}
+            actions={canRefund && !o.eligibility.refund && <Button size="sm" onClick={() => open("refund")} icon={<RotateCcw className="size-3.5" />}>New refund</Button>}>
+            {o.refunds.length === 0 ? <Empty title="No refunds" hint="Refund requests and their approval outcome appear here." /> : (
+              <Table head={[{ label: "Amount", align: "right" }, "Status", "Requested", "Approval", "Payment ref"]}>
+                {o.refunds.map((r) => (
+                  <tr key={r.id} className="align-top">
+                    <td className={td + " num text-right font-semibold"}>{inr(r.amountMinor)}</td>
+                    <td className={td}><Badge status={r.status} />{r.error && <div className="mt-1 max-w-64 text-[12px] text-bad">{r.error}</div>}</td>
+                    <td className={td}><div>{r.requestedBy}</div><div className="text-[12px] text-fg-3">{r.source} · {when(r.createdAt)}</div>{r.reason && <div className="mt-0.5 max-w-52 truncate text-[12px] text-fg-2" title={r.reason}>“{r.reason}”</div>}</td>
+                    <td className={td}>{r.approval ? <><Badge status={r.approval.status} />{r.approval.decidedBy && <div className="mt-0.5 text-[12px] text-fg-3">by {r.approval.decidedBy}</div>}</> : "—"}</td>
+                    <td className={td + " font-mono text-[12px] text-fg-2"}>{r.externalId ?? "—"}</td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </Card>
+
+          <Card title="Support tickets" pad={false} actions={canTicket && <Button size="sm" onClick={() => open("ticket")} icon={<LifeBuoy className="size-3.5" />}>New ticket</Button>}>
+            {o.tickets.length === 0 ? <Empty title="No tickets" hint="Tickets created manually or by workflows are listed here." /> : (
+              <ul className="divide-y divide-line">
+                {o.tickets.map((t) => (
+                  <li key={t.id} className="flex items-start gap-3 px-4 py-3">
+                    <LifeBuoy className="mt-0.5 size-4 shrink-0 text-fg-3" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px]">{t.reason}</div>
+                      <div className="mt-0.5 text-[12px] text-fg-3"><span className="font-mono">{t.externalId ?? "not created"}</span> · {t.createdBy} · {when(t.createdAt)}</div>
+                      {t.error && <div className="mt-0.5 text-[12px] text-bad">{t.error}</div>}
+                    </div>
+                    <Badge status={t.status} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+
+        <Card title="Timeline" pad={false} className="h-fit lg:sticky lg:top-[68px]"
+          actions={<div className="flex rounded-ctl border border-line bg-subtle p-0.5 text-[12px]">{(["all", "audit"] as const).map((t) => <button key={t} onClick={() => setTab(t)} className={clsx("rounded-[5px] px-2 py-0.5 font-medium", tab === t ? "bg-surface text-fg shadow-card" : "text-fg-3")}>{t === "all" ? "Activity" : "Full audit"}</button>)}</div>}>
+          {timeline.length === 0 ? <Empty title="No events yet" /> : (
+            <ol className="max-h-[70vh] overflow-y-auto px-4 py-3">
+              {timeline.map((e, i) => (
+                <li key={e.id} className="relative flex gap-3 pb-4 last:pb-0">
+                  {i < timeline.length - 1 && <span className="absolute left-[11px] top-6 h-[calc(100%-16px)] w-px bg-line" aria-hidden />}
+                  <span className={clsx("relative z-10 grid size-6 shrink-0 place-items-center rounded-full border border-line bg-surface", { ok: "text-ok", bad: "text-bad", warn: "text-warn", info: "text-info", violet: "text-violet", neutral: "text-fg-3", accent: "text-accent" }[e.tone])}>
+                    {e.kind === "workflow" ? <Workflow className="size-3" /> : e.tone === "ok" ? <CheckCircle2 className="size-3" /> : e.tone === "bad" ? <XCircle className="size-3" /> : e.actor?.startsWith("workflow") || e.actor === "webhook" ? <Bot className="size-3" /> : e.tone === "neutral" ? <CircleSlash className="size-3" /> : <StatusDot tone={e.tone} />}
+                  </span>
+                  <div className="min-w-0 flex-1 pt-0.5">
+                    <div className="text-[13px] font-medium leading-snug text-fg">{e.title}</div>
+                    {e.detail && <div className="mt-0.5 break-words text-[12px] text-fg-2">{e.detail}</div>}
+                    <div className="mt-0.5 text-[11px] text-fg-3">{e.actor ? `${e.actor} · ` : ""}{fullDate(e.at)}</div>
                   </div>
-                  <div className="shrink-0 text-right"><Badge status={a.outcome} /><div className="text-[10px] text-ink-400">{when(a.createdAt)}</div></div>
                 </li>
               ))}
-            </ul>
+            </ol>
           )}
         </Card>
       </div>
 
-      <Modal open={modal === "cancel"} onClose={() => setModal(null)} title={`Cancel ${o.id}?`}
-        footer={<><Button onClick={() => setModal(null)}>Keep order</Button><Button variant="danger" loading={busy} onClick={() => act(() => api(`/api/orders/${o.id}/cancel`, { json: { reason: reason || undefined } }), `${o.id} cancelled in Commerce`)}>Cancel order</Button></>}>
-        <p className="text-[13px] text-ink-600">The cancellation is sent to the Commerce system. The order is only marked cancelled here once Commerce confirms.</p>
+      <Modal open={modal === "cancel"} onClose={() => setModal(null)} title={`Cancel ${o.id}?`} description="The cancellation is sent to Commerce. The order is only marked cancelled here once Commerce confirms."
+        footer={<><Button onClick={() => setModal(null)}>Keep order</Button><Button variant="danger" loading={busy} onClick={() => act(() => api(`/api/orders/${o.id}/cancel`, { json: { reason: reason || undefined } }), "Order cancelled", `${o.id} was cancelled in Commerce.`)}>Cancel order</Button></>}>
         {formError && <ErrorBox error={formError} />}
-        <Field label="Reason (optional)"><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+        <Field label="Reason" hint="Optional — recorded in the audit log."><input data-autofocus className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Customer requested cancellation" /></Field>
       </Modal>
-      <Modal open={modal === "refund"} onClose={() => setModal(null)} title={`Request refund for ${o.id}`}
-        footer={<><Button onClick={() => setModal(null)}>Close</Button><Button variant="primary" loading={busy} disabled={!amountMinor} onClick={() => act(() => api(`/api/orders/${o.id}/refunds`, { json: { amount_minor: amountMinor, reason: reason || undefined } }), "Refund requested — waiting for manager approval")}>Submit for approval</Button></>}>
-        <p className="text-[13px] text-ink-600">Refunds need manager approval. Nothing is sent to the Payment system until a manager approves.</p>
+      <Modal open={modal === "refund"} onClose={() => setModal(null)} title={`Request refund for ${o.id}`} description="Refunds need manager approval. Nothing is sent to the Payment service until a manager approves."
+        footer={<><Button onClick={() => setModal(null)}>Cancel</Button><Button variant="primary" loading={busy} disabled={!amountMinor || !!amountError} onClick={() => act(() => api(`/api/orders/${o.id}/refunds`, { json: { amount_minor: amountMinor, reason: reason || undefined } }), "Refund requested", "Sent to the approval queue for a manager.")}>Submit for approval</Button></>}>
         {formError && <ErrorBox error={formError} />}
-        <Field label="Amount (₹)" hint={`Up to ${inr(o.eligibility.refundableMinor)} refundable`}><input className={inputCls} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" /></Field>
-        <Field label="Reason"><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+        <div className="grid grid-cols-3 gap-2 rounded-lg bg-subtle p-3 text-[12px]">
+          <div><div className="text-fg-3">Captured</div><div className="num font-medium">{inr(captured)}</div></div>
+          <div><div className="text-fg-3">Already refunded</div><div className="num font-medium">{inr(refundedOk + refundedPending)}</div></div>
+          <div><div className="text-fg-3">Refundable</div><div className="num font-medium">{inr(o.eligibility.refundableMinor)}</div></div>
+        </div>
+        <Field label="Amount (₹)" error={amountError} hint={amount && !amountMinor ? "Enter an amount like 1250 or 1250.50" : undefined}>
+          <div className="flex gap-2">
+            <input data-autofocus className={inputCls + " num"} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
+            <Button size="md" onClick={() => setAmount(String(o.eligibility.refundableMinor / 100))}>Full</Button>
+          </div>
+        </Field>
+        <Field label="Reason"><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Damaged on arrival" /></Field>
       </Modal>
-      <Modal open={modal === "ticket"} onClose={() => setModal(null)} title={`Open support ticket for ${o.id}`}
-        footer={<><Button onClick={() => setModal(null)}>Close</Button><Button variant="primary" loading={busy} disabled={!reason.trim()} onClick={() => act(() => api(`/api/orders/${o.id}/tickets`, { json: { reason } }), "Support ticket created")}>Create ticket</Button></>}>
+      <Modal open={modal === "ticket"} onClose={() => setModal(null)} title={`Open support ticket for ${o.id}`} description="The ticket is created in Commerce and linked to this order."
+        footer={<><Button onClick={() => setModal(null)}>Cancel</Button><Button variant="primary" loading={busy} disabled={!reason.trim()} onClick={() => act(() => api(`/api/orders/${o.id}/tickets`, { json: { reason } }), "Ticket created", "The support ticket is open in Commerce.")}>Create ticket</Button></>}>
         {formError && <ErrorBox error={formError} />}
-        <Field label="Reason"><textarea className={inputCls + " h-20 py-1.5"} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+        <Field label="Reason"><textarea data-autofocus className={inputCls + " h-24 resize-none py-2"} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Describe the issue for the support team" /></Field>
       </Modal>
-    </>
+    </div>
   );
+}
+
+/** Human summary of audit details: amounts in ₹, upstream refs and errors; internal cuid ids are hidden. */
+function describeDetails(d: Record<string, unknown>) {
+  const parts: string[] = [];
+  if (typeof d.amountMinor === "number") parts.push(inr(d.amountMinor));
+  if (typeof d.status === "string") parts.push(titleCase(d.status));
+  if (typeof d.externalId === "string") parts.push(d.externalId);
+  if (typeof d.source === "string" && d.source !== "manual") parts.push(`via ${d.source}`);
+  if (typeof d.newStatus === "string") parts.push(`now ${d.newStatus}`);
+  if (typeof d.reason === "string" && d.reason) parts.push(`“${d.reason}”`);
+  if (typeof d.note === "string" && d.note) parts.push(`note: “${d.note}”`);
+  if (typeof d.detail === "string") parts.push(d.detail);
+  if (typeof d.error === "string" && d.error) parts.push(d.error);
+  return parts.join(" · ") || undefined;
+}
+
+function Eligibility({ ok, label, yes, no }: { ok: boolean; label: string; yes: string; no: string | null }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-2.5 shadow-card">
+      <span className={clsx("grid size-6 shrink-0 place-items-center rounded-full", ok ? "bg-ok-soft text-ok" : "bg-neutral-soft text-fg-3")}>{ok ? <CheckCircle2 className="size-3.5" /> : <CircleSlash className="size-3.5" />}</span>
+      <div className="min-w-0 text-[13px]"><span className="font-medium">{label}</span> <span className="text-fg-2">— {ok ? yes : no}</span></div>
+    </div>
+  );
+}
+
+export default function Page({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  return <Suspense fallback={<SkeletonBlock className="h-64" />}><OrderDetail id={id} /></Suspense>;
 }

@@ -28,6 +28,8 @@ export async function dashboard() {
   const count = <T extends { _count: number }>(rows: T[], key: keyof T, v: string) => rows.find((r) => r[key] === v)?._count ?? 0;
   const failedRefunds = await db.refund.count({ where: { status: "failed" } });
   const failedOps = await db.operation.count({ where: { status: "failed" } });
+  const lastFailedSync = await db.syncRun.findFirst({ where: { status: { in: ["failed", "partial"] } }, orderBy: { startedAt: "desc" } });
+  const refundStatus2 = refundStatus.map((r) => ({ status: r.status, count: r._count, amountMinor: r._sum.amountMinor ?? 0 }));
   return {
     totals: {
       orders: totalOrders,
@@ -54,6 +56,8 @@ export async function dashboard() {
     recentExecutions,
     recentActivity,
     lastSync,
+    lastFailedSync,
+    refundStatus: refundStatus2,
     health,
     attention,
   };

@@ -25,6 +25,9 @@ const MATRIX: Record<Role, Permission[]> = {
   manager: ["read", "order.cancel", "refund.request", "refund.approve", "ticket.create", "workflow.manage", "sync.run"],
 };
 
+/** Read-only view of the permission matrix (used by the Settings page). */
+export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = MATRIX;
+
 export function can(role: Role, p: Permission) {
   return MATRIX[role].includes(p);
 }
