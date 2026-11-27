@@ -78,10 +78,21 @@ A workflow has a trigger, conditions joined with AND, and one action, stored as 
 
 ## Frontend
 
-- **Design:** a dense, neutral operations UI (ink palette with a single teal accent, Inter at 13px with tabular figures, monospace IDs) aimed at fast scanning rather than marketing gloss.
-- **Components:** I wrote small primitives (`components/ui.tsx`) instead of pulling in shadcn/ui, to save setup time and dependencies.
-- **States:** every list has loading, empty and error states. Actions use confirm dialogs and toasts. Disabled buttons show *why* they are disabled.
-- **Charts** (Recharts) read only the dashboard API; nothing on the dashboard is hardcoded.
+- **Design system first.** All colours are semantic CSS variables (`canvas`, `surface`, `line`, `fg`, `accent`, `ok/warn/bad/info`) mapped into Tailwind v4, so light and dark mode share one set of classes. Dark mode follows the system by default; the account menu or Settings overrides it, and an inline script applies the choice before first paint so there's no flash.
+- **Look:** neutral surfaces with hairline borders, a single indigo accent for primary actions, focus and selection, status colours only for status, Inter with tabular numerals, and monospace order IDs. Cards are compact, because operations users scan many numbers.
+- **One component kit** (`components/ui.tsx`):
+  - Controls: buttons, inputs, selects, segmented controls, switches.
+  - Data display: badges with one status→colour map, tables.
+  - Overlays: a modal and a side sheet, both with a focus trap, Esc to close and focus returned to the trigger; a keyboard-navigable dropdown menu.
+  - Feedback: toasts, skeletons, empty and error states.
+  - I wrote these instead of installing shadcn/ui: it would have added setup work and dependencies for roughly the same result.
+- **No fake visuals.** Charts read only the dashboard API. Charts use concrete hex values per theme, because SVG fill attributes can't read CSS variables. There are no trend arrows: the data has no history, so a trend would be invented. Because the data has no line items, the order page shows a financial summary (captured, refunded, pending, refundable) instead of made-up items.
+- **The frontend never decides permissions.** It hides or disables controls the role can't use, while the backend still enforces every rule. The Settings page shows the real permission matrix exported from `auth.ts`.
+- **Read-only API additions for the redesign:**
+  - Dashboard: refund status counts and the last failed sync.
+  - Integrations: the last failed sync.
+  - `/api/settings`: non-secret configuration facts.
+- **Dev-only artefact:** the "N" badge in the corner of local screenshots is the Next.js dev indicator. It doesn't appear in production.
 
 ## Deployment
 
