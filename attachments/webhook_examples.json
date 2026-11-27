@@ -1,0 +1,29 @@
+[
+  {
+    "event_id": "evt-001",
+    "type": "shipment.updated",
+    "occurred_at": "2026-11-22T10:00:00Z",
+    "order_id": "NC-1001",
+    "data": {
+      "status": "delayed"
+    }
+  },
+  {
+    "event_id": "evt-002",
+    "type": "payment.failed",
+    "occurred_at": "2026-11-22T10:05:00Z",
+    "order_id": "NC-1007",
+    "data": {
+      "status": "failed"
+    }
+  },
+  {
+    "event_id": "evt-003",
+    "type": "order.cancelled",
+    "occurred_at": "2026-11-22T10:10:00Z",
+    "order_id": "NC-1004",
+    "data": {
+      "status": "cancelled"
+    }
+  }
+]

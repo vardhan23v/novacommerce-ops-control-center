@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "post_cascade_response_with_transcript": [
+      {
+        "command": "python3 .steerwise/windsurf_hook.py || python .steerwise/windsurf_hook.py",
+        "show_output": false
+      }
+    ],
+    "post_cascade_response": [
+      {
+        "command": "python3 .steerwise/windsurf_hook.py || python .steerwise/windsurf_hook.py",
+        "show_output": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  viewer
+  operator
+  manager
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  role         Role
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id // random token hash
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Customer {
+  id        String   @id // C-001
+  name      String
+  email     String
+  orders    Order[]
+  syncedAt  DateTime @default(now())
+}
+
+model Order {
+  id                String          @id // NC-1001
+  customerId        String
+  customer          Customer        @relation(fields: [customerId], references: [id])
+  status            String // processing | shipped | delivered | cancelled
+  amountMinor       Int
+  currency          String
+  channel           String
+  createdAt         DateTime
+  syncedAt          DateTime        @default(now())
+  payment           Payment?
+  shipment          Shipment?
+  refunds           Refund[]
+  tickets           SupportTicket[]
+  operations        Operation[]
+
+  @@index([status])
+  @@index([customerId])
+}
+
+model Payment {
+  id          String   @id // P-001
+  orderId     String   @unique
+  order       Order    @relation(fields: [orderId], references: [id])
+  status      String // captured | failed
+  amountMinor Int
+  currency    String
+  syncedAt    DateTime @default(now())
+
+  @@index([status])
+}
+
+model Shipment {
+  id            String    @id // S-001
+  orderId       String    @unique
+  order         Order     @relation(fields: [orderId], references: [id])
+  status        String // pending | shipped | delayed | delivered | cancelled
+  updatedAt     DateTime
+  syncedAt      DateTime  @default(now())
+  lastSyncError String?
+  lastSyncErrorAt DateTime?
+
+  @@index([status])
+}
+
+// Refund lifecycle: pending_approval -> rejected | executing -> succeeded | failed
+model Refund {
+  id          String    @id @default(cuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id])
+  amountMinor Int
+  status      String
+  reason      String?
+  externalId  String?   @unique // R-xxxx from Payment API
+  error       String?
+  requestedById String?
+  requestedBy String // display name or "workflow:<name>"
+  source      String    @default("manual") // manual | workflow | assistant
+  createdAt   DateTime  @default(now())
+  executedAt  DateTime?
+  approval    Approval?
+
+  @@index([orderId])
+  @@index([status])
+}
+
+model Approval {
+  id          String    @id @default(cuid())
+  type        String    @default("refund")
+  refundId    String    @unique
+  refund      Refund    @relation(fields: [refundId], references: [id])
+  status      String // pending | approved | rejected
+  decidedById String?
+  decidedBy   String?
+  decisionNote String?
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+}
+
+model SupportTicket {
+  id         String   @id @default(cuid())
+  externalId String?  @unique // T-xxxx
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id])
+  reason     String
+  status     String // open | failed
+  error      String?
+  createdBy  String
+  source     String   @default("manual")
+  createdAt  DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// Outcome of a user-initiated operation on an order (cancellation etc.)
+model Operation {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  type      String // cancel
+  status    String // succeeded | rejected | failed
+  detail    String?
+  actor     String
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model Workflow {
+  id          String              @id @default(cuid())
+  name        String
+  trigger     String // payment.failed | shipment.updated | order.cancelled
+  conditions  Json // [{field, op, value}]
+  action      Json // {type: "create_ticket", reason} | {type: "request_refund", amount_minor | "full"}
+  enabled     Boolean             @default(true)
+  createdBy   String
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  executions  WorkflowExecution[]
+}
+
+model WorkflowExecution {
+  id         String   @id @default(cuid())
+  workflowId String
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  eventId    String
+  orderId    String?
+  status     String // succeeded | failed | skipped
+  detail     String?
+  createdAt  DateTime @default(now())
+
+  @@unique([workflowId, eventId])
+  @@index([createdAt])
+}
+
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  type       String
+  orderId    String?
+  occurredAt DateTime?
+  payload    Json
+  status     String // processed | ignored | failed
+  detail     String?
+  receivedAt DateTime @default(now())
+}
+
+model SyncRun {
+  id         String    @id @default(cuid())
+  trigger    String // manual | auto | seed
+  actor      String
+  status     String // running | succeeded | partial | failed
+  results    Json?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+}
+
+model IntegrationCall {
+  id         String   @id @default(cuid())
+  service    String // commerce | payments | shipping | health
+  method     String
+  path       String
+  statusCode Int?
+  ok         Boolean
+  error      String?
+  durationMs Int
+  attempt    Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  @@index([service, createdAt])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String
+  actorRole String?
+  action    String
+  entity    String
+  entityId  String?
+  outcome   String // success | failure | denied | info
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
