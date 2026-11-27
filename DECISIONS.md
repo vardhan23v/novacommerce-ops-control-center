@@ -85,9 +85,10 @@ A workflow has a trigger, conditions joined with AND, and one action, stored as 
 
 ## Deployment
 
-- **Vercel** hosts the app and **Neon** the Postgres database. The mock service can't run on Vercel, which only runs serverless functions and can't keep a long-running Python server alive, so it runs on Railway through a wrapper that imports the original file unchanged and binds `0.0.0.0:$PORT`.
-- **The assistant** is a second Railway service.
-- **The hosted mock** is public and resets on restart, exactly like the supplied one.
+- **Railway hosts everything:** the web app, Postgres and the mock service. That puts the app and its database on a private network with no publicly exposed database port. I first planned Vercel + Neon, but Railway's CLI couldn't give the database a public endpoint for Vercel to reach. Keeping everything in one project also keeps the mock in the same place as the app.
+- **Migrations and the idempotent seed run at container start**, because the private network isn't available at build time.
+- **The mock** runs through a wrapper that imports the original file unchanged and binds `0.0.0.0:$PORT`. It is public and resets on restart, exactly like the supplied one.
+- **The CrewAI service** is containerised but not deployed live: the free plan caps the project at three services, and it would need a Groq key. The app runs without it by design.
 
 ## Known limitations and what I'd do next
 

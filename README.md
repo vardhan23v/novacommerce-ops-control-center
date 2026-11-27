@@ -192,14 +192,23 @@ curl -s localhost:3000/api/orders?shipment=delayed -H "Authorization: Bearer $TO
 
 ## Deployment
 
-The live setup runs three pieces:
+**Live:** https://web-production-433c9171.up.railway.app (demo accounts above). **Hosted mock:** https://mock-production-a9bd98d0.up.railway.app
 
-1. **Web app on Vercel.** Set the project's root directory to `web`. The `build` script runs `prisma generate && prisma migrate deploy && next build`. Set `DATABASE_URL`, `MOCK_API_BASE_URL`, and optionally `ASSISTANT_SERVICE_URL`, `ASSISTANT_SERVICE_TOKEN` and `WEBHOOK_SECRET`. After the first deploy, run `npm run db:seed` once against the production database.
-2. **Hosted PostgreSQL** (Neon, through the Vercel Marketplace or directly).
-3. **Mock service on Railway (or any Docker host).** Build `deploy/mock/Dockerfile` from the repository root. It serves the unmodified `attachments/mock_services.py` on `0.0.0.0:$PORT`, because the original only binds `127.0.0.1`, which a hosted app can't reach.
-4. **Optional: assistant on Railway.** Build `assistant/Dockerfile` and set `GROQ_API_KEY` on the host.
+Everything runs in one Railway project:
 
-The mock keeps its state in memory and resets whenever its host restarts. The app's database does not reset, so after a mock restart, upstream and local state can disagree (for example, about a refund created before the restart). See DECISIONS.md.
+| Service | Source | Notes |
+|---|---|---|
+| `web` | `web/` (`railway up web --path-as-root --service web`) | `build`: `prisma generate && next build`. `start`: `prisma migrate deploy`, then the idempotent seed when `SEED_ON_START=1`, then `next start`. Migrations run at start because Railway's private network isn't available during builds. |
+| `Postgres` | Railway Postgres (persistent volume) | `DATABASE_URL=${{Postgres.DATABASE_URL}}` on `web`, over the private network |
+| `mock` | `deploy/mock/Dockerfile` (`RAILWAY_DOCKERFILE_PATH`) | Serves the unmodified `attachments/mock_services.py` on `0.0.0.0:$PORT`. The original only binds `127.0.0.1`, which a hosted app can't reach. |
+
+Variables on `web`: `DATABASE_URL`, `MOCK_API_BASE_URL`, `MOCK_API_TIMEOUT_MS`, `SEED_ON_START`. Optional: `ASSISTANT_SERVICE_URL` and `ASSISTANT_SERVICE_TOKEN`.
+
+The app also runs on Vercel: set the project root to `web`, use any hosted Postgres reachable at build/start time, and point `MOCK_API_BASE_URL` at the hosted mock.
+
+**Assistant service.** `assistant/Dockerfile` (build context: the repository root) deploys the CrewAI service; set `GROQ_API_KEY` on that host. It is **not deployed** on the live site because the Railway free plan allows only three services. Live, Nova Intelligence runs rule-based, which the UI labels.
+
+The hosted mock keeps its state in memory and resets whenever its host restarts. The app's database does not reset, so after a mock restart, upstream and local state can disagree (see DECISIONS.md).
 
 ## Known limitations
 
