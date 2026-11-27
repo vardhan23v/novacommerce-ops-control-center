@@ -192,21 +192,23 @@ curl -s localhost:3000/api/orders?shipment=delayed -H "Authorization: Bearer $TO
 
 ## Deployment
 
-**Live:** https://web-production-433c9171.up.railway.app (demo accounts above). **Hosted mock:** https://mock-production-a9bd98d0.up.railway.app
+**Live app:** https://novacommerce-ops.vercel.app (demo accounts above) · **Hosted mock:** https://mock-production-a9bd98d0.up.railway.app
 
-Everything runs in one Railway project:
-
-| Service | Source | Notes |
+| Piece | Where | Notes |
 |---|---|---|
-| `web` | `web/` (`railway up web --path-as-root --service web`) | `build`: `prisma generate && next build`. `start`: `prisma migrate deploy`, then the idempotent seed when `SEED_ON_START=1`, then `next start`. Migrations run at start because Railway's private network isn't available during builds. |
-| `Postgres` | Railway Postgres (persistent volume) | `DATABASE_URL=${{Postgres.DATABASE_URL}}` on `web`, over the private network |
-| `mock` | `deploy/mock/Dockerfile` (`RAILWAY_DOCKERFILE_PATH`) | Serves the unmodified `attachments/mock_services.py` on `0.0.0.0:$PORT`. The original only binds `127.0.0.1`, which a hosted app can't reach. |
+| Next.js app | **Vercel** (project root `web/`, region `bom1`) | `vercel-build`: `prisma generate && prisma migrate deploy && next build`. Settings are in `web/vercel.json`. |
+| PostgreSQL | **Supabase** (`ap-south-1`) | `DATABASE_URL` uses the Supavisor **session pooler** (IPv4, which Vercel needs) with `?sslmode=require&connection_limit=3`. A migration enables row-level security on every table, so Supabase's public Data API returns nothing; the app connects as the table owner. |
+| Mock services | **Railway** (`deploy/mock/Dockerfile`, `RAILWAY_DOCKERFILE_PATH`) | Serves the unmodified `attachments/mock_services.py` on `0.0.0.0:$PORT`. The original only binds `127.0.0.1`, which Vercel can't reach. |
+| Assistant (optional) | `assistant/Dockerfile` (build context: the repository root) | Not deployed. The live Nova Intelligence runs rule-based. Deploy it anywhere, set `GROQ_API_KEY` there, then set `ASSISTANT_SERVICE_URL` and `ASSISTANT_SERVICE_TOKEN` on Vercel. |
 
-Variables on `web`: `DATABASE_URL`, `MOCK_API_BASE_URL`, `MOCK_API_TIMEOUT_MS`, `SEED_ON_START`. Optional: `ASSISTANT_SERVICE_URL` and `ASSISTANT_SERVICE_TOKEN`.
+Vercel environment variables: `DATABASE_URL`, `MOCK_API_BASE_URL`, `MOCK_API_TIMEOUT_MS`. Seed the database once from your machine:
 
-The app also runs on Vercel: set the project root to `web`, use any hosted Postgres reachable at build/start time, and point `MOCK_API_BASE_URL` at the hosted mock.
+```bash
+cd web
+DATABASE_URL="<supabase session-pooler url>" MOCK_API_BASE_URL=https://mock-production-a9bd98d0.up.railway.app npm run db:seed
+```
 
-**Assistant service.** `assistant/Dockerfile` (build context: the repository root) deploys the CrewAI service; set `GROQ_API_KEY` on that host. It is **not deployed** on the live site because the Railway free plan allows only three services. Live, Nova Intelligence runs rule-based, which the UI labels.
+The `start` script (`prisma migrate deploy`, then the seed when `SEED_ON_START=1`, then `next start`) is for container hosts such as Railway or Render, where the database is only reachable at runtime.
 
 The hosted mock keeps its state in memory and resets whenever its host restarts. The app's database does not reset, so after a mock restart, upstream and local state can disagree (see DECISIONS.md).
 

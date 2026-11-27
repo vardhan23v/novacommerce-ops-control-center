@@ -85,10 +85,12 @@ A workflow has a trigger, conditions joined with AND, and one action, stored as 
 
 ## Deployment
 
-- **Railway hosts everything:** the web app, Postgres and the mock service. That puts the app and its database on a private network with no publicly exposed database port. I first planned Vercel + Neon, but Railway's CLI couldn't give the database a public endpoint for Vercel to reach. Keeping everything in one project also keeps the mock in the same place as the app.
-- **Migrations and the idempotent seed run at container start**, because the private network isn't available at build time.
-- **The mock** runs through a wrapper that imports the original file unchanged and binds `0.0.0.0:$PORT`. It is public and resets on restart, exactly like the supplied one.
-- **The CrewAI service** is containerised but not deployed live: the free plan caps the project at three services, and it would need a Groq key. The app runs without it by design.
+- **Vercel** hosts the Next.js app, **Supabase** the Postgres database, and **Railway** the mock service. Each piece runs where it fits: Vercel is built for Next.js, and Supabase gives a managed Postgres in Mumbai (`ap-south-1`), next to the Vercel `bom1` region.
+- **The mock can't run on Vercel.** Vercel only runs serverless functions and can't keep a long-running Python server alive, so the mock runs on Railway through a wrapper that imports the original file unchanged and binds `0.0.0.0:$PORT`.
+- **Supabase connection:** the app uses the session pooler (IPv4) with a small `connection_limit`, so serverless functions don't exhaust Postgres connections. Migrations run in the Vercel build, where Supabase is reachable.
+- **Data API lock-down.** Supabase automatically exposes the `public` schema through its REST API using a public anon key. Without row-level security, anyone holding that key could read `User` (password hashes) and `Session`. A migration enables RLS on every table with no policies, so that API sees nothing. Prisma connects as the table owner and is unaffected. I verified that an anon request to `/rest/v1/User` returns `[]`.
+- **History:** this was first deployed entirely on Railway (app, Postgres and mock). I moved the app and database to Vercel and Supabase on the candidate's request.
+- **The CrewAI service** is containerised but not deployed. The app runs without it by design.
 
 ## Known limitations and what I'd do next
 
