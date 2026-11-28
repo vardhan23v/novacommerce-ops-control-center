@@ -5,9 +5,9 @@ import { ArrowRight, Bot, ShieldCheck, Workflow } from "lucide-react";
 import { api, Button, clsx, ErrorBox, Field, inputCls } from "@/components/ui";
 
 const DEMO = [
-  { role: "Manager", email: "manager@nova.test", note: "Approves refunds" },
-  { role: "Operator", email: "operator@nova.test", note: "Cancels orders, requests refunds" },
-  { role: "Viewer", email: "viewer@nova.test", note: "Read-only" },
+  { role: "Manager", email: "manager@nova.test", password: "nova-demo-2026", note: "Approves refunds" },
+  { role: "Operator", email: "operator@nova.test", password: "nova-demo-2026", note: "Cancels orders, requests refunds" },
+  { role: "Viewer", email: "viewer@nova.test", password: "nova-demo-2026", note: "Read-only" },
 ];
 
 export default function Login() {
@@ -55,7 +55,7 @@ export default function Login() {
         <form onSubmit={submit} className="anim-in w-full max-w-[360px] space-y-5">
           <div>
             <h2 className="text-[22px] font-semibold tracking-[-0.02em]">Sign in</h2>
-            <p className="mt-1 text-[13px] text-fg-2">Use a demo account. The shared password is in the README.</p>
+            <p className="mt-1 text-[13px] text-fg-2">Use a demo account. Shared password: <span className="font-mono text-fg">nova-demo-2026</span></p>
           </div>
           {error && <ErrorBox error={error} />}
           <div className="space-y-3.5">
@@ -67,9 +67,9 @@ export default function Login() {
             <div className="mb-2 flex items-center gap-3 text-[11px] font-medium uppercase tracking-[0.06em] text-fg-3"><span className="h-px flex-1 bg-line" />Demo accounts<span className="h-px flex-1 bg-line" /></div>
             <div className="space-y-1.5">
               {DEMO.map((d) => (
-                <button type="button" key={d.email} onClick={() => setEmail(d.email)} aria-pressed={email === d.email}
+                <button type="button" key={d.email} onClick={() => { setEmail(d.email); setPassword(d.password); }} aria-pressed={email === d.email}
                   className={clsx("flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-colors", email === d.email ? "border-accent bg-accent-soft/50 ring-1 ring-accent" : "border-line bg-surface hover:border-line-strong")}>
-                  <span><span className="block text-[13px] font-medium">{d.role}</span><span className="block text-[12px] text-fg-3">{d.email}</span></span>
+                  <span><span className="block text-[13px] font-medium">{d.role}</span><span className="block text-[12px] text-fg-3">{d.email}</span><span className="block text-[11px] text-fg-3">Password: <span className="font-mono text-fg-2">{d.password}</span></span></span>
                   <span className="text-right text-[11px] text-fg-3">{d.note}</span>
                 </button>
               ))}
